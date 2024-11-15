@@ -27,6 +27,14 @@
         <label for="eligible_colleges" class="form-label">Eligible Colleges (comma-separated)</label>
         <textarea class="form-control" id="eligible_colleges" name="eligible_colleges"></textarea>
     </div>
+    <div class="mb-3">
+        <label for="date" class="form-label">Exam Date</label>
+        <input type="date" class="form-control" id="date" name="date" required>
+    </div>
+    <div class="mb-3">
+        <label for="time_limit" class="form-label">Time Limit (minutes)</label>
+        <input type="number" class="form-control" id="time_limit" name="time_limit" min="1" required>
+    </div>
     <button type="submit" class="btn btn-primary">Add Exam</button>
 </form>
 {% endblock %}

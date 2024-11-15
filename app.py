@@ -2,6 +2,7 @@ from flask import Flask, render_template, redirect, url_for, request, session, f
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate  # Import Flask-Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
+from datetime import datetime, timedelta
 
 # Initialize Flask application
 app = Flask(__name__)
@@ -28,8 +29,13 @@ class Exam(db.Model):
     age_min = db.Column(db.Integer, nullable=False)
     age_max = db.Column(db.Integer, nullable=False)
     education_level = db.Column(db.String(50), nullable=False)
-    eligible_colleges = db.Column(db.Text, nullable=True)  # Comma-separated list of colleges
+    eligible_colleges = db.Column(db.Text, nullable=True)
     mcqs = db.relationship('MCQ', backref='exam', lazy=True)
+    
+    # New fields
+    date = db.Column(db.Date, nullable=True)  # Exam date
+    time_limit = db.Column(db.Integer, nullable=True)  # Time limit in minutes
+
 
 class ExamRegistration(db.Model):
     __tablename__ = 'exam_registrations'
@@ -138,7 +144,13 @@ def add_exam():
         age_min = int(request.form['age_min'])
         age_max = int(request.form['age_max'])
         education_level = request.form['education_level']
-        eligible_colleges = request.form['eligible_colleges']  # Comma-separated
+        eligible_colleges = request.form['eligible_colleges']
+        
+        # Convert date string to Python date object
+        date_str = request.form['date']
+        exam_date = datetime.strptime(date_str, '%Y-%m-%d').date()  # Parse to date
+        
+        time_limit = int(request.form['time_limit'])
 
         exam = Exam(
             name=name,
@@ -146,12 +158,15 @@ def add_exam():
             age_min=age_min,
             age_max=age_max,
             education_level=education_level,
-            eligible_colleges=eligible_colleges
+            eligible_colleges=eligible_colleges,
+            date=exam_date,  # Use the parsed date object
+            time_limit=time_limit
         )
         db.session.add(exam)
         db.session.commit()
         flash('Exam added successfully!', 'success')
         return redirect(url_for('admin_dashboard'))
+
     return render_template('add_exam.html')
 
 @app.route('/take_exam/<int:exam_id>', methods=['GET', 'POST'])
@@ -160,15 +175,35 @@ def take_exam(exam_id):
         flash('Unauthorized access!', 'danger')
         return redirect(url_for('login'))
 
+    # Check if the student has registered for this exam
+    registration = ExamRegistration.query.filter_by(student_id=session['user_id'], exam_id=exam_id).first()
+    if not registration:
+        flash('You are not registered for this exam.', 'danger')
+        return redirect(url_for('student_dashboard'))
+
     exam = Exam.query.get_or_404(exam_id)
+
+    # Check if the exam is on the scheduled date
+    if exam.date != datetime.today().date():
+        flash('You can only take this exam on the scheduled date.', 'danger')
+        return redirect(url_for('student_dashboard'))
+
     mcqs = MCQ.query.filter_by(exam_id=exam_id).all()
 
+    # Handle the POST request
     if request.method == 'POST':
+        start_time = datetime.strptime(session.get('exam_start_time'), '%Y-%m-%d %H:%M:%S')
+        time_limit = timedelta(minutes=exam.time_limit)
+        if datetime.now() > start_time + time_limit:
+            flash('Time is up! The exam is over.', 'danger')
+            return redirect(url_for('student_dashboard'))
+
+        # Calculate score
         answers = request.form
         score = 0
 
         for key, value in answers.items():
-            mcq_id = int(key.split('_')[1])  # Extract MCQ ID
+            mcq_id = int(key.split('_')[1])
             mcq = MCQ.query.get(mcq_id)
             if mcq and mcq.correct_answer == value:
                 score += 1
@@ -180,6 +215,9 @@ def take_exam(exam_id):
 
         flash(f'You completed the exam! Your score is {score}.', 'success')
         return redirect(url_for('student_dashboard'))
+
+    # Store start time in session
+    session['exam_start_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
     return render_template('take_exam.html', exam=exam, mcqs=mcqs)
 
