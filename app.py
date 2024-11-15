@@ -45,13 +45,38 @@ class ExamRegistration(db.Model):
 class MCQ(db.Model):
     __tablename__ = 'mcqs'
     id = db.Column(db.Integer, primary_key=True)
-    exam_id = db.Column(db.Integer, db.ForeignKey('exams.id'), nullable=False)  # Foreign key to exams table
+    exam_id = db.Column(
+        db.Integer,
+        db.ForeignKey('exams.id', name='fk_mcqs_exam_id'),  # Explicitly named foreign key
+        nullable=False
+    )
     question = db.Column(db.String(255), nullable=False)
     option1 = db.Column(db.String(100), nullable=False)
     option2 = db.Column(db.String(100), nullable=False)
     option3 = db.Column(db.String(100), nullable=False)
     option4 = db.Column(db.String(100), nullable=False)
     correct_answer = db.Column(db.String(100), nullable=False)
+
+
+class Query(db.Model):
+    __tablename__ = 'queries'
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    message = db.Column(db.Text, nullable=False)
+    response = db.Column(db.Text, nullable=True)  # Admin's response
+    timestamp = db.Column(db.DateTime, default=db.func.now())
+
+class Result(db.Model):
+    __tablename__ = 'results'
+    id = db.Column(db.Integer, primary_key=True)
+    student_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    exam_id = db.Column(db.Integer, db.ForeignKey('exams.id'), nullable=False)
+    score = db.Column(db.Integer, nullable=False)
+    rank = db.Column(db.Integer, nullable=True)
+
+    # Add relationships
+    student = db.relationship('User', backref='results', lazy=True)
+    exam = db.relationship('Exam', backref='results', lazy=True)
 
 # Routes
 @app.route('/')
@@ -128,6 +153,122 @@ def add_exam():
         flash('Exam added successfully!', 'success')
         return redirect(url_for('admin_dashboard'))
     return render_template('add_exam.html')
+
+@app.route('/take_exam/<int:exam_id>', methods=['GET', 'POST'])
+def take_exam(exam_id):
+    if 'role' not in session or session['role'] != 'student':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    exam = Exam.query.get_or_404(exam_id)
+    mcqs = MCQ.query.filter_by(exam_id=exam_id).all()
+
+    if request.method == 'POST':
+        answers = request.form
+        score = 0
+
+        for key, value in answers.items():
+            mcq_id = int(key.split('_')[1])  # Extract MCQ ID
+            mcq = MCQ.query.get(mcq_id)
+            if mcq and mcq.correct_answer == value:
+                score += 1
+
+        # Save the result
+        result = Result(student_id=session['user_id'], exam_id=exam_id, score=score)
+        db.session.add(result)
+        db.session.commit()
+
+        flash(f'You completed the exam! Your score is {score}.', 'success')
+        return redirect(url_for('student_dashboard'))
+
+    return render_template('take_exam.html', exam=exam, mcqs=mcqs)
+
+@app.route('/contact_admin', methods=['GET', 'POST'])
+def contact_admin():
+    if 'role' not in session or session['role'] != 'student':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    if request.method == 'POST':
+        message = request.form['message']
+        query = Query(student_id=session['user_id'], message=message)
+        db.session.add(query)
+        db.session.commit()
+        flash('Your query has been sent to the admin.', 'success')
+        return redirect(url_for('student_dashboard'))
+
+    return render_template('contact_admin.html')
+
+@app.route('/view_results/<int:exam_id>')
+def view_results(exam_id):
+    if 'role' not in session or session['role'] != 'student':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    result = Result.query.filter_by(student_id=session['user_id'], exam_id=exam_id).first()
+    if not result:
+        flash('You have not completed this exam.', 'warning')
+        return redirect(url_for('student_dashboard'))
+
+    rankings = (
+        db.session.query(Result)
+        .filter_by(exam_id=exam_id)
+        .join(User, User.id == Result.student_id)  # Ensure student data is joined
+        .order_by(Result.score.desc())
+        .all()
+    )
+    return render_template('view_results.html', result=result, rankings=rankings)
+
+@app.route('/schedule_exam/<int:exam_id>', methods=['GET', 'POST'])
+def schedule_exam(exam_id):
+    if 'role' not in session or session['role'] != 'admin':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    exam = Exam.query.get_or_404(exam_id)
+
+    if request.method == 'POST':
+        exam_date = request.form['exam_date']
+        exam.date = exam_date
+        db.session.commit()
+        flash('Exam date scheduled successfully!', 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    return render_template('schedule_exam.html', exam=exam)
+
+@app.route('/publish_results/<int:exam_id>')
+def publish_results(exam_id):
+    if 'role' not in session or session['role'] != 'admin':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    results = Result.query.filter_by(exam_id=exam_id).order_by(Result.score.desc()).all()
+    for rank, result in enumerate(results, start=1):
+        result.rank = rank
+    db.session.commit()
+
+    flash('Results published successfully!', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/view_queries', methods=['GET', 'POST'])
+def view_queries():
+    if 'role' not in session or session['role'] != 'admin':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    queries = Query.query.filter(Query.response == None).all()  # Unanswered queries
+
+    if request.method == 'POST':
+        query_id = request.form['query_id']
+        response = request.form['response']
+        query = Query.query.get(query_id)
+        if query:
+            query.response = response
+            db.session.commit()
+            flash('Query responded successfully!', 'success')
+        return redirect(url_for('view_queries'))
+
+    return render_template('view_queries.html', queries=queries)
 
 @app.route('/admin/set_mcqs/<int:exam_id>', methods=['GET', 'POST'])
 def set_mcqs(exam_id):

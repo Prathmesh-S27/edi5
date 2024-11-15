@@ -2,15 +2,12 @@
 {% block title %}Admin Dashboard{% endblock %}
 {% block content %}
 <h2>Admin Dashboard</h2>
-<a href="{{ url_for('add_exam') }}" class="btn btn-success mb-3">Add New Exam</a>
+<a href="{{ url_for('add_exam') }}" class="btn btn-success mb-3">Add Exam</a>
 <table class="table">
     <thead>
         <tr>
-            <th>Name</th>
+            <th>Exam Name</th>
             <th>Description</th>
-            <th>Age Range</th>
-            <th>Education Level</th>
-            <th>Eligible Colleges</th>
             <th>Actions</th>
         </tr>
     </thead>
@@ -19,14 +16,14 @@
         <tr>
             <td>{{ exam.name }}</td>
             <td>{{ exam.description }}</td>
-            <td>{{ exam.age_min }} - {{ exam.age_max }}</td>
-            <td>{{ exam.education_level }}</td>
-            <td>{{ exam.eligible_colleges or "All Colleges" }}</td>
             <td>
-                <a href="{{ url_for('set_mcqs', exam_id=exam.id) }}" class="btn btn-primary btn-sm">Set MCQs</a>
+                <a href="{{ url_for('set_mcqs', exam_id=exam.id) }}" class="btn btn-info btn-sm">Set MCQs</a>
+                <a href="{{ url_for('schedule_exam', exam_id=exam.id) }}" class="btn btn-warning btn-sm">Schedule Exam</a>
+                <a href="{{ url_for('publish_results', exam_id=exam.id) }}" class="btn btn-success btn-sm">Publish Results</a>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
+<a href="{{ url_for('view_queries') }}" class="btn btn-primary">View Queries</a>
 {% endblock %}
