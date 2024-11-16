@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Manage Questions{% endblock %}
+{% block content %}
+<h2>Manage Questions for {{ exam.name }}</h2>
+
+<h3>Add New Question</h3>
+<form action="{{ url_for('manage_questions', exam_id=exam.id) }}" method="POST">
+    <div class="mb-3">
+        <label for="question" class="form-label">Question</label>
+        <input type="text" class="form-control" id="question" name="question" required>
+    </div>
+    <div class="mb-3">
+        <label for="option1" class="form-label">Option 1</label>
+        <input type="text" class="form-control" id="option1" name="option1" required>
+    </div>
+    <div class="mb-3">
+        <label for="option2" class="form-label">Option 2</label>
+        <input type="text" class="form-control" id="option2" name="option2" required>
+    </div>
+    <div class="mb-3">
+        <label for="option3" class="form-label">Option 3</label>
+        <input type="text" class="form-control" id="option3" name="option3" required>
+    </div>
+    <div class="mb-3">
+        <label for="option4" class="form-label">Option 4</label>
+        <input type="text" class="form-control" id="option4" name="option4" required>
+    </div>
+    <div class="mb-3">
+        <label for="correct_answer" class="form-label">Correct Answer</label>
+        <select class="form-select" id="correct_answer" name="correct_answer" required>
+            <option value="option1">Option 1</option>
+            <option value="option2">Option 2</option>
+            <option value="option3">Option 3</option>
+            <option value="option4">Option 4</option>
+        </select>
+    </div>
+    <button type="submit" class="btn btn-primary">Add Question</button>
+</form>
+
+<h3>Existing Questions</h3>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Question</th>
+            <th>Options</th>
+            <th>Correct Answer</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for mcq in mcqs %}
+        <tr>
+            <td>{{ mcq.question }}</td>
+            <td>{{ mcq.option1 }}, {{ mcq.option2 }}, {{ mcq.option3 }}, {{ mcq.option4 }}</td>
+            <td>{{ mcq.correct_answer }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% endblock %}

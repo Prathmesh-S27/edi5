@@ -1,22 +1,59 @@
-<h2>Results for {{ result.exam.name if result.exam else "Unknown Exam" }}</h2>
-<p><strong>Your Score:</strong> {{ result.score }}</p>
-<p><strong>Your Rank:</strong> {{ result.rank }}</p>
-<h3>Rankings</h3>
-<table class="table">
-    <thead>
+{% extends "base.html" %}
+{% block title %}View Results{% endblock %}
+{% block content %}
+
+<h2>Results for {{ exam.name }}</h2>
+
+{% if student_result %}
+    <h3>Your Result</h3>
+    <table class="table table-bordered">
+        <tr>
+            <th>Student Name</th>
+            <td>{{ session['username'] }}</td>
+        </tr>
+        <tr>
+            <th>Register Number</th>
+            <td>{{ rankings[rank - 1][2] }}</td> <!-- Aadhaar number of logged-in student -->
+        </tr>
+        <tr>
+            <th>College Name</th>
+            <td>{{ rankings[rank - 1][3] }}</td> <!-- College name of logged-in student -->
+        </tr>
+        <tr>
+            <th>Marks</th>
+            <td>{{ student_result.score }}</td>
+        </tr>
         <tr>
             <th>Rank</th>
-            <th>Student</th>
-            <th>Score</th>
+            <td>{{ rank }}</td>
         </tr>
-    </thead>
-    <tbody>
-        {% for ranking in rankings %}
-        <tr>
-            <td>{{ ranking.rank }}</td>
-            <td>{{ ranking.student.username if ranking.student else "Unknown Student" }}</td>
-            <td>{{ ranking.score }}</td>
-        </tr>
-        {% endfor %}
-    </tbody>
-</table>
+    </table>
+
+    <h3>Overall Ranking</h3>
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Rank</th>
+                <th>Student Name</th>
+                <th>Register Number</th>
+                <th>College Name</th>
+                <th>Marks</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for idx, (result, username, aadhaar_number, college_name) in enumerate(rankings, start=1) %}
+            <tr>
+                <td>{{ idx }}</td>
+                <td>{{ username }}</td>
+                <td>{{ aadhaar_number }}</td>
+                <td>{{ college_name }}</td>
+                <td>{{ result.score }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p class="text-danger">You have not completed this exam.</p>
+{% endif %}
+
+{% endblock %}

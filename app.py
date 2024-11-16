@@ -3,6 +3,8 @@ from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate  # Import Flask-Migrate
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import datetime, timedelta
+import json
+from web3 import Web3
 
 # Initialize Flask application
 app = Flask(__name__)
@@ -12,6 +14,58 @@ db = SQLAlchemy(app)
 
 # Initialize Flask-Migrate
 migrate = Migrate(app, db) 
+
+def transaction():
+    # Connect to Ganache
+    ganache_url = "http://127.0.0.1:8545"  # Update if needed
+    web3 = Web3(Web3.HTTPProvider(ganache_url))
+
+    if not web3.is_connected():
+        print("Failed to connect to Ganache. Ensure Ganache is running.")
+        return
+
+    # Set the default account
+    web3.eth.default_account = web3.eth.accounts[0]
+
+    # Load ABI and Bytecode from files
+    abi_file_path = "E:\\edi\\flask_app\\TransactionHandler_abi.json"  # Path to ABI file
+    bytecode_file_path = "E:\\edi\\flask_app\\TransactionHandler_bytecode.txt"  # Path to bytecode file
+
+    # Load ABI
+    with open(abi_file_path, 'r') as file:
+        contract_abi = json.load(file)
+
+    # Load Bytecode
+    with open(bytecode_file_path, 'r') as file:
+        contract_bytecode = file.read().strip()
+
+    # Deploy the contract
+    TransactionHandler = web3.eth.contract(abi=contract_abi, bytecode=contract_bytecode)
+    print("Deploying contract...")
+    tx_hash = TransactionHandler.constructor().transact()
+    tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+    contract_address = tx_receipt.contractAddress
+    print(f"Contract deployed successfully at address: {contract_address}")
+
+    # Load the deployed contract
+    transaction_handler = web3.eth.contract(
+        address=contract_address,
+        abi=contract_abi
+    )
+
+    # Interact with the contract
+    try:
+        recipient = web3.eth.accounts[1]  # Second account from Ganache
+        amount = web3.to_wei(0.1, 'ether')  # Amount to send (0.1 Ether)
+
+        print(f"Sending {amount} Wei to {recipient}...")
+        tx_hash = transaction_handler.functions.makeTransaction(recipient).transact({'value': amount})
+        tx_receipt = web3.eth.wait_for_transaction_receipt(tx_hash)
+
+        print(f"Transaction successful with hash: {tx_hash.hex()}")
+        print(f"Transaction receipt: {tx_receipt}")
+    except Exception as e:
+        print(f"Error during transaction: {e}")
 
 # Models
 class User(db.Model):
@@ -31,7 +85,9 @@ class Exam(db.Model):
     education_level = db.Column(db.String(50), nullable=False)
     eligible_colleges = db.Column(db.Text, nullable=True)
     mcqs = db.relationship('MCQ', backref='exam', lazy=True)
-    
+    start_time = db.Column(db.Time, nullable=True)  # Start time
+    results_published = db.Column(db.Boolean, default=False)  # New field to track result publication
+
     # New fields
     date = db.Column(db.Date, nullable=True)  # Exam date
     time_limit = db.Column(db.Integer, nullable=True)  # Time limit in minutes
@@ -100,6 +156,7 @@ def register():
             return redirect(url_for('register'))
         
         user = User(username=username, password=password, role=role)
+        transaction()
         db.session.add(user)
         db.session.commit()
 
@@ -118,6 +175,7 @@ def login():
             session['username'] = user.username
             session['role'] = user.role
             session['user_id'] = user.id  # Add user_id to session
+            transaction()
             flash('Login successful!', 'success')
             return redirect(url_for(f'{user.role}_dashboard'))
         else:
@@ -162,64 +220,116 @@ def add_exam():
             date=exam_date,  # Use the parsed date object
             time_limit=time_limit
         )
+
+        transaction()
         db.session.add(exam)
         db.session.commit()
         flash('Exam added successfully!', 'success')
         return redirect(url_for('admin_dashboard'))
 
     return render_template('add_exam.html')
-
 @app.route('/take_exam/<int:exam_id>', methods=['GET', 'POST'])
 def take_exam(exam_id):
+    # Ensure user is logged in and is a student
     if 'role' not in session or session['role'] != 'student':
         flash('Unauthorized access!', 'danger')
         return redirect(url_for('login'))
 
-    # Check if the student has registered for this exam
-    registration = ExamRegistration.query.filter_by(student_id=session['user_id'], exam_id=exam_id).first()
+    # Fetch the exam and validate its existence
+    exam = Exam.query.get_or_404(exam_id)
+
+    # Fetch current time for schedule validation
+    current_time = datetime.now()
+    exam_start_time = datetime.combine(exam.date, exam.start_time)
+    exam_end_time = exam_start_time + timedelta(minutes=exam.time_limit)
+
+    # Check if the exam is scheduled
+    if not exam.date or current_time < exam_start_time:
+        flash('The exam has not started yet.', 'danger')
+        return redirect(url_for('student_dashboard'))
+
+    # Check if the exam is within the allowed time range
+    if current_time > exam_end_time:
+        flash('The exam has ended.', 'danger')
+        return redirect(url_for('student_dashboard'))
+
+    # Check if the student is registered for the exam
+    student_id = session['user_id']
+    registration = ExamRegistration.query.filter_by(student_id=student_id, exam_id=exam_id).first()
     if not registration:
         flash('You are not registered for this exam.', 'danger')
         return redirect(url_for('student_dashboard'))
 
-    exam = Exam.query.get_or_404(exam_id)
-
-    # Check if the exam is on the scheduled date
-    if exam.date != datetime.today().date():
-        flash('You can only take this exam on the scheduled date.', 'danger')
+    # Check if the student has already attempted the exam
+    existing_result = Result.query.filter_by(student_id=student_id, exam_id=exam_id).first()
+    if existing_result:
+        flash('You have already attempted this exam.', 'danger')
         return redirect(url_for('student_dashboard'))
 
+    # Fetch the exam questions (MCQs)
     mcqs = MCQ.query.filter_by(exam_id=exam_id).all()
 
-    # Handle the POST request
+    # Handle POST request for submitting the exam
     if request.method == 'POST':
-        start_time = datetime.strptime(session.get('exam_start_time'), '%Y-%m-%d %H:%M:%S')
-        time_limit = timedelta(minutes=exam.time_limit)
-        if datetime.now() > start_time + time_limit:
+        # Check if the exam time limit has been exceeded
+        exam_start_time_in_session = session.get('exam_start_time')
+        if not exam_start_time_in_session:
+            flash('Exam session not started properly. Please try again.', 'danger')
+            return redirect(url_for('student_dashboard'))
+
+        start_time = datetime.strptime(exam_start_time_in_session, '%Y-%m-%d %H:%M:%S')
+        if current_time > start_time + timedelta(minutes=exam.time_limit):
             flash('Time is up! The exam is over.', 'danger')
             return redirect(url_for('student_dashboard'))
 
-        # Calculate score
+        # Calculate the score based on submitted answers
         answers = request.form
         score = 0
-
         for key, value in answers.items():
-            mcq_id = int(key.split('_')[1])
+            mcq_id = int(key.split('_')[1])  # Assuming keys are in the format "mcq_<id>"
             mcq = MCQ.query.get(mcq_id)
             if mcq and mcq.correct_answer == value:
                 score += 1
 
-        # Save the result
-        result = Result(student_id=session['user_id'], exam_id=exam_id, score=score)
+        # Save the exam result
+        result = Result(student_id=student_id, exam_id=exam_id, score=score)
         db.session.add(result)
         db.session.commit()
 
         flash(f'You completed the exam! Your score is {score}.', 'success')
         return redirect(url_for('student_dashboard'))
 
-    # Store start time in session
-    session['exam_start_time'] = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    # Store the exam start time in the session
+    session['exam_start_time'] = current_time.strftime('%Y-%m-%d %H:%M:%S')
 
     return render_template('take_exam.html', exam=exam, mcqs=mcqs)
+
+@app.route('/admin/review_results/<int:exam_id>', methods=['GET', 'POST'])
+def review_results(exam_id):
+    if 'role' not in session or session['role'] != 'admin':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    results = Result.query.filter_by(exam_id=exam_id).all()
+    if request.method == 'POST':
+        action = request.form['action']
+        student_id = int(request.form['student_id'])
+        result = Result.query.filter_by(student_id=student_id, exam_id=exam_id).first()
+
+        if action == 'accept':
+            result.status = 'accepted'
+        elif action == 'reject':
+            result.status = 'rejected'
+        elif action == 'second_chance':
+            result.status = 'second_chance'
+            # Allow the student to retake the exam
+            db.session.delete(result)
+
+        db.session.commit()
+        flash('Result updated successfully!', 'success')
+
+    return render_template('review_results.html', results=results)
+
 
 @app.route('/contact_admin', methods=['GET', 'POST'])
 def contact_admin():
@@ -243,20 +353,108 @@ def view_results(exam_id):
         flash('Unauthorized access!', 'danger')
         return redirect(url_for('login'))
 
-    result = Result.query.filter_by(student_id=session['user_id'], exam_id=exam_id).first()
-    if not result:
-        flash('You have not completed this exam.', 'warning')
+    exam = Exam.query.get_or_404(exam_id)
+    if not exam.results_published:
+        flash('Results for this exam are not yet published.', 'info')
         return redirect(url_for('student_dashboard'))
 
+    student_id = session['user_id']
+    student_result = Result.query.filter_by(student_id=student_id, exam_id=exam_id).first()
+
     rankings = (
-        db.session.query(Result)
-        .filter_by(exam_id=exam_id)
-        .join(User, User.id == Result.student_id)  # Ensure student data is joined
+        db.session.query(
+            Result,
+            User.username,
+            ExamRegistration.aadhaar_number,
+            ExamRegistration.college_name
+        )
+        .join(User, User.id == Result.student_id)
+        .join(ExamRegistration, (ExamRegistration.student_id == Result.student_id) & (ExamRegistration.exam_id == exam_id))
+        .filter(Result.exam_id == exam_id)
         .order_by(Result.score.desc())
         .all()
     )
-    return render_template('view_results.html', result=result, rankings=rankings)
 
+    rank = next((idx + 1 for idx, (result, _, _, _) in enumerate(rankings) if result.student_id == student_id), None)
+
+    return render_template(
+        'view_results.html', 
+        exam=exam, 
+        student_result=student_result, 
+        rankings=rankings, 
+        rank=rank,
+        enumerate=enumerate  # Pass enumerate to the template
+    )
+
+@app.route('/admin/edit_exam/<int:exam_id>', methods=['GET', 'POST'])
+def edit_exam(exam_id):
+    if 'role' not in session or session['role'] != 'admin':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    exam = Exam.query.get_or_404(exam_id)
+
+    if request.method == 'POST':
+        exam.name = request.form['name']
+        exam.description = request.form['description']
+        exam.age_min = int(request.form['age_min'])
+        exam.age_max = int(request.form['age_max'])
+        exam.education_level = request.form['education_level']
+        exam.eligible_colleges = request.form['eligible_colleges']
+        exam.date = datetime.strptime(request.form['date'], '%Y-%m-%d').date()
+        exam.time_limit = int(request.form['time_limit'])
+
+        db.session.commit()
+        flash('Exam details updated successfully!', 'success')
+        return redirect(url_for('admin_dashboard'))
+
+    return render_template('edit_exam.html', exam=exam)
+
+# Route to delete an exam
+@app.route('/admin/delete_exam/<int:exam_id>')
+def delete_exam(exam_id):
+    if 'role' not in session or session['role'] != 'admin':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    exam = Exam.query.get_or_404(exam_id)
+    db.session.delete(exam)
+    db.session.commit()
+    flash('Exam deleted successfully!', 'success')
+    return redirect(url_for('admin_dashboard'))
+
+# Route to manage questions for an exam
+@app.route('/admin/manage_questions/<int:exam_id>', methods=['GET', 'POST'])
+def manage_questions(exam_id):
+    if 'role' not in session or session['role'] != 'admin':
+        flash('Unauthorized access!', 'danger')
+        return redirect(url_for('login'))
+
+    exam = Exam.query.get_or_404(exam_id)
+
+    if request.method == 'POST':
+        question = request.form['question']
+        option1 = request.form['option1']
+        option2 = request.form['option2']
+        option3 = request.form['option3']
+        option4 = request.form['option4']
+        correct_answer = request.form['correct_answer']
+
+        mcq = MCQ(
+            exam_id=exam_id,
+            question=question,
+            option1=option1,
+            option2=option2,
+            option3=option3,
+            option4=option4,
+            correct_answer=correct_answer
+        )
+        db.session.add(mcq)
+        db.session.commit()
+        flash('Question added successfully!', 'success')
+
+    mcqs = MCQ.query.filter_by(exam_id=exam_id).all()
+    return render_template('manage_questions.html', exam=exam, mcqs=mcqs)
 @app.route('/schedule_exam/<int:exam_id>', methods=['GET', 'POST'])
 def schedule_exam(exam_id):
     if 'role' not in session or session['role'] != 'admin':
@@ -266,13 +464,28 @@ def schedule_exam(exam_id):
     exam = Exam.query.get_or_404(exam_id)
 
     if request.method == 'POST':
-        exam_date = request.form['exam_date']
-        exam.date = exam_date
-        db.session.commit()
-        flash('Exam date scheduled successfully!', 'success')
-        return redirect(url_for('admin_dashboard'))
+        # Convert date and time strings to appropriate Python objects
+        date_str = request.form['exam_date']  # Format: YYYY-MM-DD
+        start_time_str = request.form['start_time']  # Format: HH:MM
+        end_time_str = request.form['end_time']  # Format: HH:MM
+
+        try:
+            exam_date = datetime.strptime(date_str, '%Y-%m-%d').date()  # Convert to date object
+            start_time = datetime.strptime(start_time_str, '%H:%M').time()  # Convert to time object
+            end_time = datetime.strptime(end_time_str, '%H:%M').time()  # Convert to time object
+
+            # Update the exam with the schedule
+            exam.date = exam_date
+            exam.start_time = start_time
+            exam.end_time = end_time
+            db.session.commit()
+            flash('Exam schedule updated successfully!', 'success')
+            return redirect(url_for('admin_dashboard'))
+        except ValueError as e:
+            flash(f'Invalid date or time format: {e}', 'danger')
 
     return render_template('schedule_exam.html', exam=exam)
+
 
 @app.route('/publish_results/<int:exam_id>')
 def publish_results(exam_id):
@@ -280,13 +493,16 @@ def publish_results(exam_id):
         flash('Unauthorized access!', 'danger')
         return redirect(url_for('login'))
 
-    results = Result.query.filter_by(exam_id=exam_id).order_by(Result.score.desc()).all()
-    for rank, result in enumerate(results, start=1):
-        result.rank = rank
+    # Fetch the exam
+    exam = Exam.query.get_or_404(exam_id)
+
+    # Update the results_published flag
+    exam.results_published = True
     db.session.commit()
 
     flash('Results published successfully!', 'success')
     return redirect(url_for('admin_dashboard'))
+
 
 @app.route('/view_queries', methods=['GET', 'POST'])
 def view_queries():
@@ -333,6 +549,7 @@ def set_mcqs(exam_id):
             option4=option4,
             correct_answer=correct_answer
         )
+        transaction()
         db.session.add(mcq)
         db.session.commit()
         flash('MCQ added successfully!', 'success')
@@ -341,11 +558,42 @@ def set_mcqs(exam_id):
     mcqs = MCQ.query.filter_by(exam_id=exam_id).all()
     return render_template('set_mcqs.html', exam=exam, mcqs=mcqs)
 
+from datetime import datetime
+
 @app.route('/student_dashboard')
 def student_dashboard():
     if 'role' in session and session['role'] == 'student':
+        student_id = session['user_id']
         exams = Exam.query.all()
-        return render_template('student_dashboard.html', exams=exams)
+        registrations = ExamRegistration.query.filter_by(student_id=student_id).all()
+
+        # Fetch registered and attempted exams
+        registered_exam_ids = {reg.exam_id for reg in registrations}
+        attempted_exam_ids = {
+            result.exam_id for result in Result.query.filter_by(student_id=student_id).all()
+        }
+
+        # Precompute exam statuses
+        current_time = datetime.now()
+        exam_statuses = {}
+        for exam in exams:
+            if exam.start_time is None:
+                exam_statuses[exam.id] = 'invalid_time'
+            else:
+                exam_start = datetime.combine(exam.date, exam.start_time)
+                if exam.id in attempted_exam_ids:
+                    exam_statuses[exam.id] = 'submitted'
+                elif current_time < exam_start:
+                    exam_statuses[exam.id] = 'not_started'
+                else:
+                    exam_statuses[exam.id] = 'available'
+
+        return render_template(
+            'student_dashboard.html',
+            exams=exams,
+            registered_exam_ids=registered_exam_ids,
+            exam_statuses=exam_statuses
+        )
     flash('Access unauthorized. Please log in as a student.', 'danger')
     return redirect(url_for('login'))
 
@@ -385,9 +633,9 @@ def register_exam(exam_id):
             age=age
         )
         db.session.add(registration)
-        db.session.commit()
+        db.session.commit()  # Ensure changes are saved to the database
         flash('You have successfully registered for the exam!', 'success')
-        return redirect(url_for('student_dashboard'))
+        return redirect(url_for('student_dashboard'))  # Redirect to refresh data
 
     return render_template('register_exam.html', exam=exam)
 
@@ -402,3 +650,4 @@ def logout():
 if __name__ == '__main__':
     db.create_all()  # Create tables if they don't exist
     app.run(debug=True)
+

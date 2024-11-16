@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}View Results{% endblock %}
+{% block content %}
+<h2>Results for {{ exam.name }}</h2>
+
+{% if result %}
+    <h3>Your Score: {{ result.score }}</h3>
+    <table class="table">
+        <thead>
+            <tr>
+                <th>Rank</th>
+                <th>Student</th>
+                <th>Score</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for rank, result in enumerate(rankings, 1) %}
+            <tr>
+                <td>{{ rank }}</td>
+                <td>{{ result.student.username }}</td>
+                <td>{{ result.score }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+{% else %}
+    <p class="text-danger">You have not completed this exam.</p>
+{% endif %}
+{% endblock %}
